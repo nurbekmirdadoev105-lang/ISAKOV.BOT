@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 # =========================================================
 
 
-
+TOKEN = os.environ["TOKEN"]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()

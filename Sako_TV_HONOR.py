@@ -2894,29 +2894,58 @@ async def process_special_start(callback: CallbackQuery):
 
     cursor.execute(
         """
-        SELECT invites_count
+        SELECT special_active, special_completed, special_start_invites
         FROM users
         WHERE user_id = ?
         """,
         (user_id,)
     )
     row = cursor.fetchone()
-    current_invites = row[0] if row else 0
 
-    cursor.execute(
-        """
-        UPDATE users
-        SET special_active = 1,
-            special_brand = ?,
-            special_username = NULL,
-            special_model = NULL,
-            special_start_invites = ?,
-            special_completed = 0
-        WHERE user_id = ?
-        """,
-        ("ALL", current_invites, user_id)
+    if row:
+        special_active, special_completed, special_start_invites = row
+    else:
+        special_active = 0
+        special_completed = 0
+        special_start_invites = 0
+
+    # Если заявка уже активна — НЕ обнуляем её прогресс.
+    if not special_active or special_completed:
+        cursor.execute(
+            """
+            SELECT invites_count
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        )
+        invite_row = cursor.fetchone()
+        current_invites = invite_row[0] if invite_row else 0
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET special_active = 1,
+                special_brand = 'ALL',
+                special_username = NULL,
+                special_model = NULL,
+                special_start_invites = ?,
+                special_completed = 0
+            WHERE user_id = ?
+            """,
+            (current_invites, user_id)
+        )
+        conn.commit()
+
+    await callback.message.edit_text(
+        "🛠️ Особенная настройка\n\n"
+        "📱 Пожалуйста, напишите свой Telegram nick.\n"
+        "❗ Ник должен начинаться с @\n"
+        "Например: @username\n\n",
+        reply_markup=get_special_progress_keyboard()
     )
-    conn.commit()
+
+    await callback.answer()
 
     await callback.message.edit_text(
         "🛠️ Особенная настройка\n\n"

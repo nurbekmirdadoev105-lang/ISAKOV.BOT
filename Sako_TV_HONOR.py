@@ -134,6 +134,7 @@ except sqlite3.OperationalError:
 for column_sql in [
     "ALTER TABLE users ADD COLUMN special_active INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN special_brand TEXT",
+    "ALTER TABLE users ADD COLUMN special_username TEXT",
     "ALTER TABLE users ADD COLUMN special_model TEXT",
     "ALTER TABLE users ADD COLUMN special_start_invites INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN special_completed INTEGER DEFAULT 0"
@@ -232,6 +233,7 @@ async def complete_special_request(user_id: int):
         """
         SELECT special_active,
                special_brand,
+               special_username,
                special_model,
                special_start_invites,
                special_completed
@@ -248,6 +250,7 @@ async def complete_special_request(user_id: int):
     (
         special_active,
         special_brand,
+        special_username,
         special_model,
         special_start_invites,
         special_completed
@@ -295,21 +298,22 @@ async def complete_special_request(user_id: int):
 
     conn.commit()
 
-    # Берём username именно того пользователя, который сделал заявку.
+    # Используем TG username, который пользователь указал перед моделью.
+    # Если он не указан/старый запрос — пробуем взять username из Telegram.
+    username = (special_username or "").strip()
+    if username and not username.startswith("@"):
+        username = "@" + username
+
     try:
         chat = await bot.get_chat(user_id)
-        username = (
-            f"@{chat.username}"
-            if chat.username
-            else "без username"
-        )
         first_name = chat.first_name or "Без имени"
+        if not username and chat.username:
+            username = f"@{chat.username}"
     except Exception:
-        username = (
-            f"@{SPECIAL_ADMIN_USERNAME}"
-            if False else "без username"
-        )
         first_name = "Без имени"
+
+    if not username:
+        username = "@не указан"
 
     model = special_model.strip()
     brand = (special_brand or "").upper()
@@ -2906,19 +2910,23 @@ async def process_special_start(callback: CallbackQuery):
         UPDATE users
         SET special_active = 1,
             special_brand = ?,
+            special_username = NULL,
             special_model = NULL,
             special_start_invites = ?,
             special_completed = 0
         WHERE user_id = ?
         """,
-        ("OPPO/Vivo", current_invites, user_id)
+        ("ALL", current_invites, user_id)
     )
     conn.commit()
 
     await callback.message.edit_text(
         "⚙️ Особенная настройка\n\n"
-        "Напишите точную модель вашего телефона.\n"
-        "Например: OPPO Reno 13 Pro или Vivo X200 Pro.\n\n"
+        "1️⃣ Сначала напишите ваш Telegram username.\n"
+        "Например: @username\n\n"
+        "📩 На ваш TG будет отправлена настройка.\n\n"
+        "2️⃣ Затем напишите точную модель вашего телефона.\n"
+        "Можно указать любую модель телефона.\n\n"
         "После этого нужно пригласить 5 новых пользователей.\n"
         "Каждый пользователь должен зайти по вашей "
         "реферальной ссылке и подписаться на все 3 канала.\n\n"
@@ -2944,7 +2952,7 @@ async def process_special_model_text(message: Message):
 
     cursor.execute(
         """
-        SELECT special_active, special_brand, special_model,
+        SELECT special_active, special_brand, special_username, special_model,
                special_start_invites, special_completed
         FROM users
         WHERE user_id = ?
@@ -2959,6 +2967,7 @@ async def process_special_model_text(message: Message):
     (
         special_active,
         special_brand,
+        special_username,
         special_model,
         special_start_invites,
         special_completed
@@ -2967,34 +2976,56 @@ async def process_special_model_text(message: Message):
     if not special_active or special_completed:
         return
 
-    model = message.text.strip()
+    value = message.text.strip()
+    if len(value) < 2:
+        await message.answer("❌ Введите корректное значение.")
+        return
 
-    if len(model) < 2:
+    # Шаг 1: сначала запрашиваем TG username.
+    if not special_username:
+        username = value.strip()
+        if not username.startswith("@"):
+            username = "@" + username
+
+        # Username Telegram: @ + 5..32 символов, буквы/цифры/_.
+        import re
+        if not re.fullmatch(r"@[A-Za-z0-9_]{5,32}", username):
+            await message.answer(
+                "❌ Неверный Telegram username.\n\n"
+                "Напишите его в формате: @username"
+            )
+            return
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET special_username = ?
+            WHERE user_id = ?
+            """,
+            (username, user_id)
+        )
+        conn.commit()
+
         await message.answer(
-            "❌ Напишите точную модель телефона."
+            f"✅ Telegram сохранён: {username}\n\n"
+            f"📩 На ваш TG {username} будет отправлена настройка.\n\n"
+            "2️⃣ Теперь напишите точную модель вашего телефона.\n"
+            "Например: Samsung S9+, iPhone 15 Pro, OPPO Reno 13 Pro "
+            "или Vivo X200 Pro."
         )
         return
 
-    # Для особенной настройки принимаем только OPPO или Vivo.
-    model_lower = model.lower()
-    if not (model_lower.startswith("oppo") or model_lower.startswith("vivo")):
-        await message.answer(
-            "❌ Для особенной настройки нужно указать модель OPPO или Vivo.\n\n"
-            "Например: OPPO Reno 13 Pro или Vivo X200 Pro."
-        )
-        return
-
-    # Автоматически определяем бренд из введённой модели.
-    special_brand = "OPPO" if model_lower.startswith("oppo") else "VIVO"
+    # Шаг 2: принимаем любую модель телефона.
+    model = value
 
     cursor.execute(
         """
         UPDATE users
         SET special_model = ?,
-            special_brand = ?
+            special_brand = 'ALL'
         WHERE user_id = ?
         """,
-        (model, special_brand, user_id)
+        (model, user_id)
     )
     conn.commit()
 
@@ -3012,29 +3043,30 @@ async def process_special_model_text(message: Message):
     progress = max(0, current_invites - start_invites)
     remaining = max(0, 5 - progress)
 
-    # На случай, если 5 invite уже были набраны после старта заявки.
     if remaining == 0:
         completed = await complete_special_request(user_id)
         if completed:
             return
 
     bot_info = await bot.get_me()
-    ref_link = (
-        f"https://t.me/{bot_info.username}?start={user_id}"
-    )
+    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+
+    username = special_username
+    if username and not username.startswith("@"):
+        username = "@" + username
 
     await message.answer(
         f"✅ Модель сохранена: {model}\n\n"
-        f"📱 Бренд: {(special_brand or '').upper()}\n"
+        f"📩 Настройка будет отправлена на ваш TG: {username}\n"
         f"👥 Прогресс: {progress}/5 invite\n"
-        f"📣 Осталось пригласить: {remaining}\n\n"
+        f"🏆 Осталось пригласить: {remaining}\n\n"
         "🔗 Ваша реферальная ссылка:\n"
         f"{ref_link}\n\n"
         "Отправьте ссылку друзьям.\n"
         "Invite засчитывается после того, как новый пользователь "
         "зайдёт по вашей ссылке и подпишется на все 3 канала.\n\n"
         "После 5 подтверждённых invite заявка автоматически "
-        "уйдёт администратору.",
+        "уйдёт в канал.",
         reply_markup=get_special_progress_keyboard()
     )
 

@@ -2986,7 +2986,7 @@ async def process_special_model_text(message: Message):
             )
             return
 
-        if not re.fullmatch(r"@[A-Za-z0-9_]{5,32}", username):
+        if not re.fullmatch(r"@[A-Za-z0-9_]+", username):
             await message.answer(
                 "❌ Неверный Telegram nick.\n\n"
                 "В начале должен быть @, затем только буквы, цифры или _.\n"

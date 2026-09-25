@@ -346,13 +346,12 @@ async def complete_special_request(user_id: int):
     # Отдельное уведомление в новый канал.
     if SPECIAL_ORDER_CHANNEL.strip():
         channel_text = (
-            "📥 НОВАЯ ЗАЯВКА — ОСОБЕННАЯ НАСТРОЙКА\n\n"
-            f"👤 Имя: {first_name}\n"
-            f"🔗 Username: {username}\n"
+            "📥 НОВЫЙ ЗАКАЗ — ОСОБЕННАЯ НАСТРОЙКА\n\n"
+            f"🔗 TG nick: {username}\n"
             f"🆔 Telegram ID: {user_id}\n"
-            f"📱 Бренд: {brand}\n"
-            f"📱 Модель: {model}\n"
-            "👥 Invite: 5/5"
+            f"📱 Модель телефона: {model}\n"
+            "👥 Invite: 5/5\n\n"
+            "📩 На указанный TG nick должна быть отправлена настройка."
         )
 
         try:
@@ -2922,16 +2921,16 @@ async def process_special_start(callback: CallbackQuery):
 
     await callback.message.edit_text(
         "⚙️ Особенная настройка\n\n"
-        "1️⃣ Сначала напишите ваш Telegram username.\n"
+        "1️⃣ Пожалуйста, напишите свой Telegram nick.\n"
+        "❗ Ник должен начинаться с @\n"
         "Например: @username\n\n"
-        "📩 На ваш TG будет отправлена настройка.\n\n"
-        "2️⃣ Затем напишите точную модель вашего телефона.\n"
-        "Можно указать любую модель телефона.\n\n"
-        "После этого нужно пригласить 5 новых пользователей.\n"
-        "Каждый пользователь должен зайти по вашей "
+        "2️⃣ Укажите точную модель телефона.\n"
+        "Можно написать любую модель телефона.\n\n"
+        "3️⃣ После этого пригласите 5 новых пользователей.\n"
+        "Каждый новый пользователь должен зайти по вашей "
         "реферальной ссылке и подписаться на все 3 канала.\n\n"
-        "После 5 подтверждённых invite заявка автоматически "
-        "отправится администратору.",
+        "После 5 подтверждённых invite заказ автоматически "
+        "придёт в ваш новый канал вместе с указанными данными.",
         reply_markup=get_special_progress_keyboard()
     )
 
@@ -2984,15 +2983,22 @@ async def process_special_model_text(message: Message):
     # Шаг 1: сначала запрашиваем TG username.
     if not special_username:
         username = value.strip()
-        if not username.startswith("@"):
-            username = "@" + username
 
-        # Username Telegram: @ + 5..32 символов, буквы/цифры/_.
+        # ВАЖНО: пользователь обязан написать ник именно с @.
+        # Автоматически добавлять @ не будем.
         import re
+        if not username.startswith("@"): 
+            await message.answer(
+                "❌ Ошибка! В начале Telegram nick должен быть символ @.\n\n"
+                "Пожалуйста, напишите ник в формате: @username"
+            )
+            return
+
         if not re.fullmatch(r"@[A-Za-z0-9_]{5,32}", username):
             await message.answer(
-                "❌ Неверный Telegram username.\n\n"
-                "Напишите его в формате: @username"
+                "❌ Неверный Telegram nick.\n\n"
+                "В начале должен быть @, затем только буквы, цифры или _.\n"
+                "Пример: @username"
             )
             return
 
@@ -3007,14 +3013,13 @@ async def process_special_model_text(message: Message):
         conn.commit()
 
         await message.answer(
-            f"✅ Telegram сохранён: {username}\n\n"
+            f"✅ TG nick сохранён: {username}\n\n"
             f"📩 На ваш TG {username} будет отправлена настройка.\n\n"
-            "2️⃣ Теперь напишите точную модель вашего телефона.\n"
-            "Например: Samsung S9+, iPhone 15 Pro, OPPO Reno 13 Pro "
-            "или Vivo X200 Pro."
+            "2️⃣ Теперь укажите точную модель телефона.\n"
+            "Можно написать любую модель: Samsung S9+, iPhone 15 Pro, "
+            "OPPO Reno 13 Pro, Vivo X200 Pro и т.д."
         )
         return
-
     # Шаг 2: принимаем любую модель телефона.
     model = value
 
@@ -3057,16 +3062,17 @@ async def process_special_model_text(message: Message):
 
     await message.answer(
         f"✅ Модель сохранена: {model}\n\n"
-        f"📩 Настройка будет отправлена на ваш TG: {username}\n"
-        f"👥 Прогресс: {progress}/5 invite\n"
+        f"📩 На ваш TG {username} будет отправлена настройка.\n\n"
+        "3️⃣ Теперь пригласите 5 новых пользователей.\n\n"
+        f"👥 Invite: {progress}/5\n"
         f"🏆 Осталось пригласить: {remaining}\n\n"
         "🔗 Ваша реферальная ссылка:\n"
         f"{ref_link}\n\n"
-        "Отправьте ссылку друзьям.\n"
-        "Invite засчитывается после того, как новый пользователь "
+        "Отправьте эту ссылку друзьям.\n"
+        "Каждый invite засчитывается после того, как новый пользователь "
         "зайдёт по вашей ссылке и подпишется на все 3 канала.\n\n"
-        "После 5 подтверждённых invite заявка автоматически "
-        "уйдёт в канал.",
+        "После 5 подтверждённых invite заказ автоматически "
+        "придёт в новый канал со всеми данными.",
         reply_markup=get_special_progress_keyboard()
     )
 

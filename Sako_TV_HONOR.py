@@ -3,7 +3,7 @@ import asyncio
 import sqlite3
 import os
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -22,6 +22,58 @@ TOKEN = os.environ["TOKEN"]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# =========================================================
+# SUBSCRIPTION GUARD
+# =========================================================
+# Проверяем подписку не только при /start, но и при каждом
+# повторном использовании кнопок/вводе текста. Поэтому если
+# пользователь отписался после первого входа, доступ снова
+# закрывается до повторной подписки на все 3 канала.
+
+class SubscriptionGuardMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user_id = getattr(getattr(event, "from_user", None), "id", None)
+
+        if not user_id:
+            return await handler(event, data)
+
+        # /start и кнопка проверки подписки должны проходить
+        # без блокировки, потому что они сами запускают проверку.
+        if isinstance(event, Message):
+            text = event.text or ""
+            if text.startswith("/start"):
+                return await handler(event, data)
+
+        if isinstance(event, CallbackQuery):
+            if event.data == "check_sub":
+                return await handler(event, data)
+
+        if not await check_subscriptions(user_id):
+            try:
+                if isinstance(event, CallbackQuery):
+                    await event.answer(
+                        "❌ Сначала подпишитесь на все 3 канала!",
+                        show_alert=True
+                    )
+                    if event.message:
+                        await event.message.edit_text(
+                            "❌ Доступ закрыт!\n\n"
+                            "Подпишитесь на все 3 канала и нажмите "
+                            "«✅ Я подписался!».",
+                            reply_markup=get_sub_keyboard()
+                        )
+                elif isinstance(event, Message):
+                    await event.answer(
+                        "❌ Для использования бота вы должны "
+                        "быть подписаны на все 3 канала!",
+                        reply_markup=get_sub_keyboard()
+                    )
+            except Exception as e:
+                logging.warning(f"Subscription guard response error: {e}")
+            return
+
+        return await handler(event, data)
 
 # =========================================================
 # CHANNELS
@@ -118,6 +170,11 @@ async def check_subscriptions(user_id: int) -> bool:
 
     return True
 
+# Вешаем глобальную проверку после определения check_subscriptions.
+# Она действует на все сообщения/колбэки, кроме /start и check_sub.
+dp.message.outer_middleware(SubscriptionGuardMiddleware())
+dp.callback_query.outer_middleware(SubscriptionGuardMiddleware())
+
 # =========================================================
 # OPPO / VIVO SPECIAL REQUEST
 # =========================================================
@@ -153,14 +210,9 @@ def get_special_main_keyboard():
 
 
 def get_special_progress_keyboard():
+    # В режиме «Особенная настройка» кнопки поддержки нет.
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🆘 Поддержка",
-                    url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
-                )
-            ],
             [
                 InlineKeyboardButton(
                     text="⬅️ Назад к брендам",
@@ -243,6 +295,7 @@ async def complete_special_request(user_id: int):
 
     conn.commit()
 
+    # Берём username именно того пользователя, который сделал заявку.
     try:
         chat = await bot.get_chat(user_id)
         username = (
@@ -252,11 +305,18 @@ async def complete_special_request(user_id: int):
         )
         first_name = chat.first_name or "Без имени"
     except Exception:
-        username = "без username"
+        username = (
+            f"@{SPECIAL_ADMIN_USERNAME}"
+            if False else "без username"
+        )
         first_name = "Без имени"
 
     model = special_model.strip()
     brand = (special_brand or "").upper()
+    if model.lower().startswith("oppo"):
+        brand = "OPPO"
+    elif model.lower().startswith("vivo"):
+        brand = "VIVO"
 
     order_text = (
         "🔥 НОВАЯ ЗАЯВКА — ОСОБЕННАЯ НАСТРОЙКА\n\n"
@@ -282,10 +342,13 @@ async def complete_special_request(user_id: int):
     # Отдельное уведомление в новый канал.
     if SPECIAL_ORDER_CHANNEL.strip():
         channel_text = (
-            "📥 НОВЫЙ ПОЛЬЗОВАТЕЛЬ\n\n"
-            f"👤 Telegram: {username}\n"
-            f"🆔 ID: {user_id}\n"
-            f"📱 Устройство: {brand} {model}"
+            "📥 НОВАЯ ЗАЯВКА — ОСОБЕННАЯ НАСТРОЙКА\n\n"
+            f"👤 Имя: {first_name}\n"
+            f"🔗 Username: {username}\n"
+            f"🆔 Telegram ID: {user_id}\n"
+            f"📱 Бренд: {brand}\n"
+            f"📱 Модель: {model}\n"
+            "👥 Invite: 5/5"
         )
 
         try:
@@ -304,8 +367,7 @@ async def complete_special_request(user_id: int):
             user_id,
             "✅ 5 invite выполнено!\n\n"
             "📱 Ваша заявка на особенную настройку принята.\n"
-            "📨 Скоро наш администратор свяжется с вами.",
-            reply_markup=get_support_keyboard()
+            "📨 Скоро наш администратор свяжется с вами."
         )
     except Exception as e:
         logging.warning(
@@ -2849,13 +2911,13 @@ async def process_special_start(callback: CallbackQuery):
             special_completed = 0
         WHERE user_id = ?
         """,
-        ("oppo_vivo", current_invites, user_id)
+        ("OPPO/Vivo", current_invites, user_id)
     )
     conn.commit()
 
     await callback.message.edit_text(
         "⚙️ Особенная настройка\n\n"
-        "Напишите точную модель вашего телефона (OPPO или Vivo).\n"
+        "Напишите точную модель вашего телефона.\n"
         "Например: OPPO Reno 13 Pro или Vivo X200 Pro.\n\n"
         "После этого нужно пригласить 5 новых пользователей.\n"
         "Каждый пользователь должен зайти по вашей "
@@ -2913,13 +2975,26 @@ async def process_special_model_text(message: Message):
         )
         return
 
+    # Для особенной настройки принимаем только OPPO или Vivo.
+    model_lower = model.lower()
+    if not (model_lower.startswith("oppo") or model_lower.startswith("vivo")):
+        await message.answer(
+            "❌ Для особенной настройки нужно указать модель OPPO или Vivo.\n\n"
+            "Например: OPPO Reno 13 Pro или Vivo X200 Pro."
+        )
+        return
+
+    # Автоматически определяем бренд из введённой модели.
+    special_brand = "OPPO" if model_lower.startswith("oppo") else "VIVO"
+
     cursor.execute(
         """
         UPDATE users
-        SET special_model = ?
+        SET special_model = ?,
+            special_brand = ?
         WHERE user_id = ?
         """,
-        (model, user_id)
+        (model, special_brand, user_id)
     )
     conn.commit()
 

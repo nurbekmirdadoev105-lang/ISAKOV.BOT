@@ -34,6 +34,22 @@ CHANNELS = [
 ]
 
 # =========================================================
+# SPECIAL OPPO / VIVO SETTINGS
+# =========================================================
+# Support/admin username. Can be changed in Railway Variables.
+SPECIAL_ADMIN_USERNAME = os.getenv(
+    "SPECIAL_ADMIN_USERNAME",
+    "isakovffx"
+)
+
+# New channel for special-order notifications.
+# Example Railway Variable: SPECIAL_ORDER_CHANNEL=@your_channel
+SPECIAL_ORDER_CHANNEL = os.getenv(
+    "SPECIAL_ORDER_CHANNEL",
+    ""
+)
+
+# =========================================================
 # DATABASE
 # =========================================================
 
@@ -45,7 +61,12 @@ CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     referrer_id INTEGER,
     invites_count INTEGER DEFAULT 0,
-    referral_confirmed INTEGER DEFAULT 0
+    referral_confirmed INTEGER DEFAULT 0,
+    special_active INTEGER DEFAULT 0,
+    special_brand TEXT,
+    special_model TEXT,
+    special_start_invites INTEGER DEFAULT 0,
+    special_completed INTEGER DEFAULT 0
 )
 """)
 
@@ -56,6 +77,19 @@ try:
     )
 except sqlite3.OperationalError:
     pass
+
+# Новые поля для OPPO/Vivo специальной настройки.
+for column_sql in [
+    "ALTER TABLE users ADD COLUMN special_active INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN special_brand TEXT",
+    "ALTER TABLE users ADD COLUMN special_model TEXT",
+    "ALTER TABLE users ADD COLUMN special_start_invites INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN special_completed INTEGER DEFAULT 0"
+]:
+    try:
+        cursor.execute(column_sql)
+    except sqlite3.OperationalError:
+        pass
 
 conn.commit()
 
@@ -83,6 +117,211 @@ async def check_subscriptions(user_id: int) -> bool:
             return False
 
     return True
+
+# =========================================================
+# OPPO / VIVO SPECIAL REQUEST
+# =========================================================
+
+def get_support_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🆘 Поддержка",
+                    url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
+                )
+            ]
+        ]
+    )
+
+
+def get_special_brand_keyboard(brand):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⚙️ Особенная настройка",
+                    callback_data=f"special_start_{brand}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🆘 Поддержка",
+                    url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад к брендам",
+                    callback_data="back_to_brands"
+                )
+            ]
+        ]
+    )
+
+
+def get_special_progress_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🆘 Поддержка",
+                    url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад к брендам",
+                    callback_data="back_to_brands"
+                )
+            ]
+        ]
+    )
+
+
+async def complete_special_request(user_id: int):
+    """
+    Завершает специальную заявку после 5 НОВЫХ подтверждённых invite.
+    Invite для обычных тарифов не списываются.
+    """
+    cursor.execute(
+        """
+        SELECT special_active,
+               special_brand,
+               special_model,
+               special_start_invites,
+               special_completed
+        FROM users
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        return False
+
+    (
+        special_active,
+        special_brand,
+        special_model,
+        special_start_invites,
+        special_completed
+    ) = row
+
+    if (
+        not special_active
+        or special_completed
+        or not special_model
+    ):
+        return False
+
+    cursor.execute(
+        """
+        SELECT invites_count
+        FROM users
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    invite_row = cursor.fetchone()
+    current_invites = invite_row[0] if invite_row else 0
+
+    start_invites = special_start_invites or 0
+
+    if current_invites - start_invites < 5:
+        return False
+
+    # Сначала фиксируем выполнение, чтобы повторные проверки
+    # не отправляли одну и ту же заявку несколько раз.
+    cursor.execute(
+        """
+        UPDATE users
+        SET special_active = 0,
+            special_completed = 1
+        WHERE user_id = ?
+        AND special_active = 1
+        AND special_completed = 0
+        """,
+        (user_id,)
+    )
+
+    if cursor.rowcount == 0:
+        return False
+
+    conn.commit()
+
+    try:
+        chat = await bot.get_chat(user_id)
+        username = (
+            f"@{chat.username}"
+            if chat.username
+            else "без username"
+        )
+        first_name = chat.first_name or "Без имени"
+    except Exception:
+        username = "без username"
+        first_name = "Без имени"
+
+    model = special_model.strip()
+    brand = (special_brand or "").upper()
+
+    order_text = (
+        "🔥 НОВАЯ ЗАЯВКА — ОСОБЕННАЯ НАСТРОЙКА\n\n"
+        f"👤 Пользователь: {first_name}\n"
+        f"🔗 Telegram: {username}\n"
+        f"🆔 ID: {user_id}\n"
+        f"📱 Бренд: {brand}\n"
+        f"📱 Модель: {model}\n"
+        "👥 Выполнено: 5 подтверждённых invite"
+    )
+
+    # Заявка администратору.
+    try:
+        await bot.send_message(
+            f"@{SPECIAL_ADMIN_USERNAME.lstrip('@')}",
+            order_text
+        )
+    except Exception as e:
+        logging.warning(
+            f"Could not send special order to admin: {e}"
+        )
+
+    # Отдельное уведомление в новый канал.
+    if SPECIAL_ORDER_CHANNEL.strip():
+        channel_text = (
+            "📥 НОВЫЙ ПОЛЬЗОВАТЕЛЬ\n\n"
+            f"👤 Telegram: {username}\n"
+            f"🆔 ID: {user_id}\n"
+            f"📱 Устройство: {brand} {model}"
+        )
+
+        try:
+            await bot.send_message(
+                SPECIAL_ORDER_CHANNEL.strip(),
+                channel_text
+            )
+        except Exception as e:
+            logging.warning(
+                f"Could not send special order to channel: {e}"
+            )
+
+    # Пользователю.
+    try:
+        await bot.send_message(
+            user_id,
+            "✅ 5 invite выполнено!\n\n"
+            "📱 Ваша заявка на особенную настройку принята.\n"
+            "📨 Скоро наш администратор свяжется с вами.",
+            reply_markup=get_support_keyboard()
+        )
+    except Exception as e:
+        logging.warning(
+            f"Could not notify special-order user: {e}"
+        )
+
+    return True
+
 
 # =========================================================
 # CONFIRM REFERRAL
@@ -156,6 +395,10 @@ async def confirm_referral(user_id: int):
         )
     except Exception:
         pass
+
+    # Если у реферера активна специальная заявка OPPO/Vivo,
+    # проверяем, набрал ли он 5 новых подтверждённых invite.
+    await complete_special_request(referrer_id)
 
 # =========================================================
 # SUBSCRIPTION BUTTONS
@@ -238,6 +481,16 @@ def get_brands_keyboard():
                 InlineKeyboardButton(
                     text="📱 Tecno",
                     callback_data="brand_tecno"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📱 OPPO",
+                    callback_data="brand_oppo"
+                ),
+                InlineKeyboardButton(
+                    text="📱 Vivo",
+                    callback_data="brand_vivo"
                 )
             ]
         ]
@@ -2486,6 +2739,186 @@ async def process_xiaomi_group(callback: CallbackQuery):
     )
 
     await callback.answer()
+
+# =========================================================
+# OPPO / VIVO SPECIAL SETTINGS
+# =========================================================
+
+@dp.callback_query(F.data == "brand_oppo")
+async def process_oppo(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "📱 OPPO\n\n"
+        "⚙️ Для OPPO доступна особенная настройка.\n"
+        "🆘 Также можно обратиться в поддержку.",
+        reply_markup=get_special_brand_keyboard("oppo")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "brand_vivo")
+async def process_vivo(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "📱 Vivo\n\n"
+        "⚙️ Для Vivo доступна особенная настройка.\n"
+        "🆘 Также можно обратиться в поддержку.",
+        reply_markup=get_special_brand_keyboard("vivo")
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("special_start_"))
+async def process_special_start(callback: CallbackQuery):
+    brand = callback.data.replace(
+        "special_start_",
+        "",
+        1
+    ).lower()
+
+    if brand not in ("oppo", "vivo"):
+        await callback.answer(
+            "Неизвестный бренд",
+            show_alert=True
+        )
+        return
+
+    user_id = callback.from_user.id
+
+    cursor.execute(
+        """
+        SELECT invites_count
+        FROM users
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    current_invites = row[0] if row else 0
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET special_active = 1,
+            special_brand = ?,
+            special_model = NULL,
+            special_start_invites = ?,
+            special_completed = 0
+        WHERE user_id = ?
+        """,
+        (brand, current_invites, user_id)
+    )
+    conn.commit()
+
+    await callback.message.edit_text(
+        f"📱 Бренд: {brand.upper()}\n\n"
+        "⚙️ Особенная настройка\n\n"
+        "Напишите точную модель вашего телефона.\n"
+        "Например: OPPO Reno 13 Pro или Vivo X200 Pro.\n\n"
+        "После этого нужно пригласить 5 новых пользователей.\n"
+        "Каждый пользователь должен зайти по вашей "
+        "реферальной ссылке и подписаться на все 3 канала.\n\n"
+        "После 5 подтверждённых invite заявка автоматически "
+        "отправится администратору.",
+        reply_markup=get_special_progress_keyboard()
+    )
+
+    await callback.answer()
+
+
+# =========================================================
+# SPECIAL MODEL TEXT INPUT
+# =========================================================
+
+@dp.message()
+async def process_special_model_text(message: Message):
+    # /start обрабатывается отдельным handler выше.
+    if not message.text or message.text.startswith("/"):
+        return
+
+    user_id = message.from_user.id
+
+    cursor.execute(
+        """
+        SELECT special_active, special_brand, special_model,
+               special_start_invites, special_completed
+        FROM users
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        return
+
+    (
+        special_active,
+        special_brand,
+        special_model,
+        special_start_invites,
+        special_completed
+    ) = row
+
+    if not special_active or special_completed:
+        return
+
+    model = message.text.strip()
+
+    if len(model) < 2:
+        await message.answer(
+            "❌ Напишите точную модель телефона."
+        )
+        return
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET special_model = ?
+        WHERE user_id = ?
+        """,
+        (model, user_id)
+    )
+    conn.commit()
+
+    cursor.execute(
+        """
+        SELECT invites_count
+        FROM users
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    invite_row = cursor.fetchone()
+    current_invites = invite_row[0] if invite_row else 0
+    start_invites = special_start_invites or 0
+    progress = max(0, current_invites - start_invites)
+    remaining = max(0, 5 - progress)
+
+    # На случай, если 5 invite уже были набраны после старта заявки.
+    if remaining == 0:
+        completed = await complete_special_request(user_id)
+        if completed:
+            return
+
+    bot_info = await bot.get_me()
+    ref_link = (
+        f"https://t.me/{bot_info.username}?start={user_id}"
+    )
+
+    await message.answer(
+        f"✅ Модель сохранена: {model}\n\n"
+        f"📱 Бренд: {(special_brand or '').upper()}\n"
+        f"👥 Прогресс: {progress}/5 invite\n"
+        f"📣 Осталось пригласить: {remaining}\n\n"
+        "🔗 Ваша реферальная ссылка:\n"
+        f"{ref_link}\n\n"
+        "Отправьте ссылку друзьям.\n"
+        "Invite засчитывается после того, как новый пользователь "
+        "зайдёт по вашей ссылке и подпишется на все 3 канала.\n\n"
+        "После 5 подтверждённых invite заявка автоматически "
+        "уйдёт администратору.",
+        reply_markup=get_special_progress_keyboard()
+    )
+
 
 # =========================================================
 # OTHER BRANDS

@@ -2919,10 +2919,10 @@ async def process_special_start(callback: CallbackQuery):
     conn.commit()
 
     await callback.message.edit_text(
-        "⚙️ Особенная настройка\n\n"
-        "1️⃣ Пожалуйста, напишите свой Telegram nick.\n"
+        "🛠️ Особенная настройка\n\n"
+        "📱 Пожалуйста, напишите свой Telegram nick.\n"
         "❗ Ник должен начинаться с @\n"
-        "Например: @username\n\n"
+        "Например: @username\n\n",
         reply_markup=get_special_progress_keyboard()
     )
 

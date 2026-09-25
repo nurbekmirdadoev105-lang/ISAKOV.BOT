@@ -135,25 +135,17 @@ def get_support_keyboard():
     )
 
 
-def get_special_brand_keyboard(brand):
+def get_special_main_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⚙️ Особенная настройка",
-                    callback_data=f"special_start_{brand}"
-                )
-            ],
-            [
+                    callback_data="special_start"
+                ),
                 InlineKeyboardButton(
                     text="🆘 Поддержка",
                     url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Назад к брендам",
-                    callback_data="back_to_brands"
                 )
             ]
         ]
@@ -491,6 +483,16 @@ def get_brands_keyboard():
                 InlineKeyboardButton(
                     text="📱 Vivo",
                     callback_data="brand_vivo"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚙️ Особенная настройка",
+                    callback_data="special_start"
+                ),
+                InlineKeyboardButton(
+                    text="🆘 Поддержка",
+                    url=f"https://t.me/{SPECIAL_ADMIN_USERNAME.lstrip('@')}"
                 )
             ]
         ]
@@ -2744,13 +2746,71 @@ async def process_xiaomi_group(callback: CallbackQuery):
 # OPPO / VIVO SPECIAL SETTINGS
 # =========================================================
 
+OPPO_MODELS = [
+    ("OPPO Find X8 Pro", "oppo_find_x8_pro"),
+    ("OPPO Find X8", "oppo_find_x8"),
+    ("OPPO Find X7 Ultra", "oppo_find_x7_ultra"),
+    ("OPPO Reno 13 Pro", "oppo_reno_13_pro"),
+    ("OPPO Reno 13", "oppo_reno_13"),
+    ("OPPO Reno 12 Pro", "oppo_reno_12_pro"),
+    ("OPPO Reno 12", "oppo_reno_12"),
+    ("OPPO Reno 11 Pro", "oppo_reno_11_pro"),
+    ("OPPO Reno 11", "oppo_reno_11"),
+    ("OPPO A5 Pro", "oppo_a5_pro"),
+    ("OPPO A3 Pro", "oppo_a3_pro"),
+    ("OPPO A79", "oppo_a79"),
+    ("OPPO A58", "oppo_a58"),
+    ("OPPO A78", "oppo_a78"),
+]
+
+VIVO_MODELS = [
+    ("Vivo X200 Pro", "vivo_x200_pro"),
+    ("Vivo X200", "vivo_x200"),
+    ("Vivo X100 Pro", "vivo_x100_pro"),
+    ("Vivo X100", "vivo_x100"),
+    ("Vivo V50", "vivo_v50"),
+    ("Vivo V40 Pro", "vivo_v40_pro"),
+    ("Vivo V40", "vivo_v40"),
+    ("Vivo V30 Pro", "vivo_v30_pro"),
+    ("Vivo V30", "vivo_v30"),
+    ("Vivo Y200", "vivo_y200"),
+    ("Vivo Y100", "vivo_y100"),
+    ("Vivo Y36", "vivo_y36"),
+    ("Vivo Y28", "vivo_y28"),
+    ("Vivo Y18", "vivo_y18"),
+]
+
+def get_oppo_models():
+    rows = []
+    for i in range(0, len(OPPO_MODELS), 2):
+        row = [
+            InlineKeyboardButton(text=OPPO_MODELS[i][0], callback_data=f"model_{OPPO_MODELS[i][1]}")
+        ]
+        if i + 1 < len(OPPO_MODELS):
+            row.append(InlineKeyboardButton(text=OPPO_MODELS[i+1][0], callback_data=f"model_{OPPO_MODELS[i+1][1]}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к брендам", callback_data="back_to_brands")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_vivo_models():
+    rows = []
+    for i in range(0, len(VIVO_MODELS), 2):
+        row = [
+            InlineKeyboardButton(text=VIVO_MODELS[i][0], callback_data=f"model_{VIVO_MODELS[i][1]}")
+        ]
+        if i + 1 < len(VIVO_MODELS):
+            row.append(InlineKeyboardButton(text=VIVO_MODELS[i+1][0], callback_data=f"model_{VIVO_MODELS[i+1][1]}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к брендам", callback_data="back_to_brands")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.callback_query(F.data == "brand_oppo")
 async def process_oppo(callback: CallbackQuery):
     await callback.message.edit_text(
-        "📱 OPPO\n\n"
-        "⚙️ Для OPPO доступна особенная настройка.\n"
-        "🆘 Также можно обратиться в поддержку.",
-        reply_markup=get_special_brand_keyboard("oppo")
+        "📱 Выберите модель OPPO:",
+        reply_markup=get_oppo_models()
     )
     await callback.answer()
 
@@ -2758,29 +2818,14 @@ async def process_oppo(callback: CallbackQuery):
 @dp.callback_query(F.data == "brand_vivo")
 async def process_vivo(callback: CallbackQuery):
     await callback.message.edit_text(
-        "📱 Vivo\n\n"
-        "⚙️ Для Vivo доступна особенная настройка.\n"
-        "🆘 Также можно обратиться в поддержку.",
-        reply_markup=get_special_brand_keyboard("vivo")
+        "📱 Выберите модель Vivo:",
+        reply_markup=get_vivo_models()
     )
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("special_start_"))
+@dp.callback_query(F.data == "special_start")
 async def process_special_start(callback: CallbackQuery):
-    brand = callback.data.replace(
-        "special_start_",
-        "",
-        1
-    ).lower()
-
-    if brand not in ("oppo", "vivo"):
-        await callback.answer(
-            "Неизвестный бренд",
-            show_alert=True
-        )
-        return
-
     user_id = callback.from_user.id
 
     cursor.execute(
@@ -2804,14 +2849,13 @@ async def process_special_start(callback: CallbackQuery):
             special_completed = 0
         WHERE user_id = ?
         """,
-        (brand, current_invites, user_id)
+        ("oppo_vivo", current_invites, user_id)
     )
     conn.commit()
 
     await callback.message.edit_text(
-        f"📱 Бренд: {brand.upper()}\n\n"
         "⚙️ Особенная настройка\n\n"
-        "Напишите точную модель вашего телефона.\n"
+        "Напишите точную модель вашего телефона (OPPO или Vivo).\n"
         "Например: OPPO Reno 13 Pro или Vivo X200 Pro.\n\n"
         "После этого нужно пригласить 5 новых пользователей.\n"
         "Каждый пользователь должен зайти по вашей "

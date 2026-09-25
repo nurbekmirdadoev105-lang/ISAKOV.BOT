@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 # =========================================================
 
 
-TOKEN = ("8749982095:AAGbm4DZFzJ-I--kt0ifa7TLHrEyhqWd88")
+
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
